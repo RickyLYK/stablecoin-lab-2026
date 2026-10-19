@@ -10,3 +10,4 @@ demo-state.json
 # online for make setup.
 # This file used to carry a lib/ line, which kept lib/ out of the repo and left students
 # with an empty directory.
+.env.anvil

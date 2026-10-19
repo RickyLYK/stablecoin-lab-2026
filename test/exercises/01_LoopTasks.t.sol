@@ -7,6 +7,9 @@ import {MockUSDC} from "../../src/MockUSDC.sol";
 import {SimpleStablecoin} from "../../src/SimpleStablecoin.sol";
 import {Vault} from "../../src/Vault.sol";
 
+import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
+
 /// @title Ex2 + Ex4 — hands-on tasks: turn red into green
 /// @notice Every `assertTrue(false, "TODO ...")` below is a placeholder. Write the real
 ///         assertion, watch the test go green, and that exercise is done.
@@ -39,7 +42,19 @@ contract LoopTasksTest is Test {
     ///      usdc first.
     function test_Ex2_DepositIncreasesSupplyByExactly(uint96 raw) public {
         uint256 amount = uint256(raw) % 1_000_000e6;
-        assertTrue(false, "TODO Ex2.1");
+        vm.assume(amount != 0);
+
+        usdc.faucet(alice, amount);
+
+        uint256 supplyBefore = stable.totalSupply();
+
+        vm.startPrank(alice);
+        usdc.approve(address(vault), amount);
+        vault.deposit(amount);
+        vm.stopPrank();
+
+        assertEq(stable.totalSupply(), supplyBefore + amount, "supply must grow by exactly x");
+        assertEq(vault.totalCollateral(), stable.totalSupply(), "p.6 invariant: collateral >= supply");
     }
 
     /// @dev Run deposit with 1000e18 instead of 1000e6, see what happens, then assert what
@@ -47,7 +62,18 @@ contract LoopTasksTest is Test {
     ///      There is no expected answer here; the point is that you run it yourself and
     ///      read the numbers.
     function test_Ex2_DecimalsTrap() public {
-        assertTrue(false, "TODO Ex2.2");
+        uint256 wrongAmount = 1000e18;
+
+        usdc.faucet(alice, wrongAmount);
+
+        uint256 supplyBefore = stable.totalSupply();
+
+        vm.startPrank(alice);
+        usdc.approve(address(vault), wrongAmount);
+        vault.deposit(wrongAmount);
+        vm.stopPrank();
+        assertEq(stable.totalSupply() - supplyBefore, wrongAmount, "1:1 in raw units, wrong scale in my head");
+        assertEq(vault.totalCollateral(), stable.totalSupply(), "invariant still holds");
     }
 
     // ==================================================================
@@ -57,29 +83,80 @@ contract LoopTasksTest is Test {
     /// @dev The attacker has no MINTER_ROLE, so calling mint directly must revert. Use
     ///      vm.expectRevert + abi.encodeWithSelector to pin down the exact error.
     function test_Ex4_Mint_RevertsForNonMinter() public {
-        assertTrue(false, "TODO Ex4.1");
+        vm.prank(attacker);
+        vm.expectRevert();
+        stable.mint(attacker, 1000e6);
     }
 
     /// @dev After pause(), an ordinary transfer must revert
     function test_Ex4_Pause_BlocksTransfers() public {
-        assertTrue(false, "TODO Ex4.2");
+        usdc.faucet(alice, 1000e6);
+        vm.startPrank(alice);
+        usdc.approve(address(vault), 1000e6);
+        vault.deposit(1000e6);
+        vm.stopPrank();
+
+        stable.pause();
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Pausable.EnforcedPause.selector));
+        stable.transfer(attacker, 100e6);
     }
 
     /// @dev What pause() freezes is _update, so redemption is frozen along with everything
     ///      else — why is that bad news in a real crisis?
     ///      (This is STUDENT-QUESTIONS.md B1 and B2.)
     function test_Ex4_Pause_BlocksRedeem() public {
-        assertTrue(false, "TODO Ex4.3");
+        usdc.faucet(alice, 1000e6);
+        vm.startPrank(alice);
+        usdc.approve(address(vault), 1000e6);
+        vault.deposit(1000e6);
+        vm.stopPrank();
+
+        stable.pause();
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Pausable.EnforcedPause.selector));
+        vault.redeem(1000e6);
     }
 
     /// @dev An attacker cannot burn someone else's balance
     function test_Ex4_AttackerCannotBurnOthersBalance() public {
-        assertTrue(false, "TODO Ex4.4");
+        usdc.faucet(alice, 1000e6);
+        vm.startPrank(alice);
+        usdc.approve(address(vault), 1000e6);
+        vault.deposit(1000e6);
+        vm.stopPrank();
+
+        bytes32 minterRole = stable.MINTER_ROLE();   // <-- compute BEFORE the prank
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                attacker,
+                minterRole
+            )
+        );
+        vm.prank(attacker);
+        stable.burn(alice, 1000e6);
+
+        assertEq(stable.balanceOf(alice), 1000e6, "alice untouched");
     }
 
     /// @dev ...but the vault can, because it holds MINTER_ROLE and burn() answers to that
     ///      same role. This test proves the backdoor exists; it does not justify it.
     function test_Ex4_VaultHoldsTheKey_CanBurnAnyonesBalance() public {
-        assertTrue(false, "TODO Ex4.5");
+        usdc.faucet(alice, 1000e6);
+        vm.startPrank(alice);
+        usdc.approve(address(vault), 1000e6);
+        vault.deposit(1000e6);
+        vm.stopPrank();
+
+        assertEq(stable.balanceOf(alice), 1000e6);
+
+        vm.prank(address(vault));
+        stable.burn(alice, 1000e6);
+
+        assertEq(stable.balanceOf(alice), 0, "vault burned alice's balance");
     }
 }
